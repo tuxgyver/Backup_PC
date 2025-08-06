@@ -21,22 +21,22 @@ Un script Bash pour sauvegarder et restaurer les applications et configurations 
 1. Clonez le dépôt sur votre machine locale :
 
    ```bash
-   git clone https://github.com/votre-utilisateur/votre-depot.git
+   git clone https://github.com/tuxgyver/Backup_PC.git
 
 
 Accédez au répertoire du projet :
- cd votre-depot
+ cd Backup_PC
 
 
 Assurez-vous que le script est exécutable :
- chmod +x nom_du_script.sh
+ chmod +x backup_pc.sh
 
 
 ## Utilisation
 
 
-Exécutez le script avec les permissions nécessaires :
- Copier./nom_du_script.sh
+Exécutez le script :
+ ./backup_pc.sh
 
 
 Suivez les instructions du menu pour effectuer des sauvegardes, des restaurations, ou gérer les sauvegardes existantes.
@@ -47,12 +47,12 @@ Effectuer une sauvegarde complète
 
 Sélectionnez l'option 1 dans le menu principal pour effectuer une sauvegarde complète.
 
-* Restaurer à partir d'une sauvegarde *
+* Restaurer à partir d'une sauvegarde
 
 Sélectionnez l'option 2 dans le menu principal.
 Suivez les instructions pour spécifier le chemin de la sauvegarde à restaurer.
 
-* Vérifier les applications Flatpak *
+* Vérifier les applications Flatpak
 
 Sélectionnez l'option 3 dans le menu principal pour vérifier et installer les applications Flatpak manquantes.
 
@@ -60,10 +60,10 @@ Sélectionnez l'option 3 dans le menu principal pour vérifier et installer les 
 Les contributions sont les bienvenues ! Pour contribuer, veuillez suivre ces étapes :
 
 ### Fork le projet.
-Créez une nouvelle branche (git checkout -b feature-branch).
-Commitez vos modifications (git commit -am 'Add new feature').
-Poussez la branche (git push origin feature-branch).
-Ouvrez une Pull Request.
+* Créez une nouvelle branche (git checkout -b feature-branch).
+* Commitez vos modifications (git commit -am 'Add new feature').
+* Poussez la branche (git push origin feature-branch).
+* Ouvrez une Pull Request.
 
 ## Licence
 Ce projet est sous licence MIT.

@@ -6,7 +6,9 @@ Un script Bash pour sauvegarder et restaurer les applications et configurations 
 
 - Sauvegarde et restauration des paquets DEB.
 - Sauvegarde et restauration des applications Flatpak.
-- Sauvegarde et restauration des extensions GNOME.
+- Sauvegarde et restauration des extensions et compte GNOME.
+- Sauvegarde et restauration des connexions Wifi.
+- Sauvegarde et restauration des connexions Réseaux GNOME.
 - Sauvegarde et restauration des comptes utilisateurs.
 - Sauvegarde et restauration des configurations de Brave et Bottles.
 - Gestion des sauvegardes existantes.

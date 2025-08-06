@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Répertoires et fichiers
-BACKUP_DIR="$HOME/gnome-accounts-network-backup"
+BACKUP_DIR="$HOME/Backups/gnome-accounts-network-backup"
 GOA_CONFIG_DIR="$HOME/.config/goa-1.0"
 EVOLUTION_CONFIG_DIR="$HOME/.config/evolution"
 KEYRING_DIR="$HOME/.local/share/keyrings"

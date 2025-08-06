@@ -116,28 +116,61 @@ backup_flatpak() {
 
 backup_gnome_extensions() {
     print_info "Sauvegarde des extensions GNOME..."
-
+    
+    # Vérifier que GNOME Shell est en cours d'exécution
     if ! pgrep -x "gnome-shell" > /dev/null; then
         print_warning "GNOME Shell n'est pas en cours d'exécution. Les extensions GNOME ne seront pas sauvegardées."
         return 1
     fi
-
-    mkdir -p "$BACKUP_DIR/gnome"
-
-    if ! gnome-extensions list > "$BACKUP_DIR/gnome/extensions_list.txt" 2>/dev/null; then
-        print_error "Erreur lors de la connexion à Shell de GNOME"
+    
+    # Vérifier les dépendances
+    if ! command -v gnome-extensions >/dev/null 2>&1; then
+        print_error "gnome-extensions n'est pas installé"
         return 1
     fi
-
-    dconf dump /org/gnome/shell/extensions/ > "$BACKUP_DIR/gnome/extensions_config.dconf" 2>/dev/null
-    dconf dump /org/gnome/ > "$BACKUP_DIR/gnome/gnome_settings.dconf" 2>/dev/null
-
-    if [ -d "$HOME/.local/share/gnome-shell/extensions" ]; then
-        cp -r "$HOME/.local/share/gnome-shell/extensions" "$BACKUP_DIR/gnome/"
+    
+    if ! command -v dconf >/dev/null 2>&1; then
+        print_error "dconf n'est pas installé"
+        return 1
     fi
-
+    
+    mkdir -p "$BACKUP_DIR/gnome" || {
+        print_error "Impossible de créer le répertoire de sauvegarde"
+        return 1
+    }
+    
+    # Sauvegarder la liste des extensions
+    if ! gnome-extensions list > "$BACKUP_DIR/gnome/extensions_list.txt" 2>/dev/null; then
+        print_error "Erreur lors de la récupération de la liste des extensions"
+        return 1
+    fi
+    
+    # Sauvegarder la configuration des extensions avec gestion d'erreur
+    if ! dconf dump /org/gnome/shell/extensions/ > "$BACKUP_DIR/gnome/extensions_config.dconf" 2>/dev/null; then
+        print_warning "Impossible de sauvegarder la configuration des extensions"
+    fi
+    
+    # Sauvegarder les paramètres GNOME généraux
+    if ! dconf dump /org/gnome/ > "$BACKUP_DIR/gnome/gnome_settings.dconf" 2>/dev/null; then
+        print_warning "Impossible de sauvegarder les paramètres GNOME"
+    fi
+    
+    # Sauvegarder les fichiers des extensions avec vérification de taille
+    if [ -d "$HOME/.local/share/gnome-shell/extensions" ]; then
+        local ext_size=$(du -sm "$HOME/.local/share/gnome-shell/extensions" 2>/dev/null | cut -f1)
+        if [ "${ext_size:-0}" -gt 100 ]; then
+            print_warning "Le dossier extensions est volumineux (${ext_size}MB). Création d'une archive..."
+            tar -czf "$BACKUP_DIR/gnome/extensions.tar.gz" -C "$HOME/.local/share/gnome-shell" extensions 2>/dev/null || {
+                print_warning "Impossible de créer l'archive des extensions"
+            }
+        else
+            cp -r "$HOME/.local/share/gnome-shell/extensions" "$BACKUP_DIR/gnome/" 2>/dev/null || {
+                print_warning "Impossible de copier le dossier extensions"
+            }
+        fi
+    fi
+    
     print_success "Extensions GNOME sauvegardées"
-}
 
 backup_accounts() {
     print_info "Sauvegarde des comptes..."

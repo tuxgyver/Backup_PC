@@ -415,22 +415,109 @@ main_menu() {
         echo "2. Restaurer à partir d'une sauvegarde"
         echo "3. Vérifier les applications Flatpak"
         echo "4. Gérer les sauvegardes"
-        echo "5. Quitter"
+        echo "5. Installer Ollama et Open WebUI"
+        echo "6. Télécharger les modèles"
+        echo "7. Quitter"
         echo
 
-        read -p "Choix (1-5): " choice
+        read -p "Choix (1-7): " choice
         case $choice in
             1) full_backup ;;
             2) restore_menu ;;
             3) check_and_install_flatpak_apps ;;
             4) backup_management_menu ;;
-            5)
+            5) install_ollama_and_openwebui ;;
+            6) download_models ;;
+            7)
                 print_info "${BLUE}Au revoir !${NC}"
                 exit 0
                 ;;
             *) print_error "Choix invalide" ;;
         esac
     done
+}
+
+# Fonction pour télécharger les modèles
+download_models() {
+    print_info "Téléchargement des modèles..."
+
+    # Téléchargement des modèles
+    ollama pull mistral
+    ollama pull llama3:3b
+    ollama pull llama3:8b
+    ollama pull deepseek-r1:8b
+    print_success "Modèles téléchargés avec succès."
+}
+
+install_ollama_and_openwebui() {
+    print_info "Installation et configuration d'Ollama et Open WebUI..."
+
+    # Installation d'Ollama
+    print_info "Installation d'Ollama..."
+    curl -fsSL https://ollama.com/install.sh | sh
+
+    # Configuration d'Ollama en tant que service
+    print_info "Configuration d'Ollama en tant que service..."
+    sudo tee /etc/systemd/system/ollama.service > /dev/null <<EOL
+[Unit]
+Description=Ollama Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/ollama serve
+User=$USER
+Group=$USER
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable ollama.service
+    sudo systemctl start ollama.service
+
+    # Installation de Docker
+    print_info "Installation de Docker..."
+    sudo apt-get update
+    sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    sudo apt-get update
+    sudo apt-get install -y docker-ce
+    sudo systemctl enable docker
+    sudo systemctl start docker
+
+    # Installation de Docker Compose
+    print_info "Installation de Docker Compose..."
+    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+    sudo chmod +x /usr/local/bin/docker-compose
+
+    # Configuration d'Open WebUI
+    print_info "Configuration d'Open WebUI..."
+    mkdir -p ~/open-webui
+    cd ~/open-webui
+
+    cat > docker-compose.yml <<EOF
+version: '3.8'
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+EOF
+
+    docker-compose pull
+    docker-compose up -d
+
+    print_success "Ollama et Open WebUI ont été installés et configurés avec succès."
 }
 
 restore_menu() {

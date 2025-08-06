@@ -25,11 +25,11 @@ Un script Bash pour sauvegarder et restaurer les applications et configurations 
 
 
 Accédez au répertoire du projet :
- Copiercd votre-depot
+ cd votre-depot
 
 
 Assurez-vous que le script est exécutable :
- Copierchmod +x nom_du_script.sh
+ chmod +x nom_du_script.sh
 
 
 ## Utilisation

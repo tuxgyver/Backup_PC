@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # Script complet de sauvegarde/restauration pour AnduinOS 1.3.3
-# Version: 3.1
+# Version: 4.0
+# Auteur: Fontaine Johnny
 
 set -euo pipefail
 
 # Configuration
 DEFAULT_BACKUP_BASE_DIR="$HOME/Backups/System"
-BACKUP_DIR="$DEFAULT_BACKUP_BASE_DIR/backup_$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Couleurs
@@ -71,10 +72,9 @@ declare -A FLATPAK_APPS=(
     ["Zoom"]="us.zoom.Zoom"
 )
 
-### FONCTIONS DE BASE ###
 check_dependencies() {
     local missing=0
-    local required=("flatpak" "rsync" "du" "dconf" "gnome-extensions")
+    local required=("flatpak" "rsync" "dconf" "gnome-extensions")
 
     for cmd in "${required[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -91,7 +91,6 @@ check_dependencies() {
     return 0
 }
 
-### FONCTIONS DE SAUVEGARDE ###
 backup_deb_packages() {
     print_info "Sauvegarde des paquets DEB..."
     mkdir -p "$BACKUP_DIR/deb"
@@ -118,7 +117,6 @@ backup_flatpak() {
 backup_gnome_extensions() {
     print_info "Sauvegarde des extensions GNOME..."
 
-    # Vérifier si l'utilisateur est dans un environnement GNOME
     if ! pgrep -x "gnome-shell" > /dev/null; then
         print_warning "GNOME Shell n'est pas en cours d'exécution. Les extensions GNOME ne seront pas sauvegardées."
         return 1
@@ -126,28 +124,16 @@ backup_gnome_extensions() {
 
     mkdir -p "$BACKUP_DIR/gnome"
 
-    # Essayer de sauvegarder les extensions GNOME
     if ! gnome-extensions list > "$BACKUP_DIR/gnome/extensions_list.txt" 2>/dev/null; then
         print_error "Erreur lors de la connexion à Shell de GNOME"
         return 1
     fi
 
-    # Sauvegarder la configuration dconf
-    if ! dconf dump /org/gnome/shell/extensions/ > "$BACKUP_DIR/gnome/extensions_config.dconf" 2>/dev/null; then
-        print_error "Erreur lors de la sauvegarde de la configuration des extensions GNOME"
-    fi
+    dconf dump /org/gnome/shell/extensions/ > "$BACKUP_DIR/gnome/extensions_config.dconf" 2>/dev/null
+    dconf dump /org/gnome/ > "$BACKUP_DIR/gnome/gnome_settings.dconf" 2>/dev/null
 
-    if ! dconf dump /org/gnome/ > "$BACKUP_DIR/gnome/gnome_settings.dconf" 2>/dev/null; then
-        print_error "Erreur lors de la sauvegarde des paramètres GNOME"
-    fi
-
-    # Sauvegarder les fichiers des extensions
     if [ -d "$HOME/.local/share/gnome-shell/extensions" ]; then
-        if ! cp -r "$HOME/.local/share/gnome-shell/extensions" "$BACKUP_DIR/gnome/"; then
-            print_error "Erreur lors de la copie des fichiers des extensions GNOME"
-        fi
-    else
-        print_warning "Le répertoire des extensions GNOME n'existe pas : $HOME/.local/share/gnome-shell/extensions"
+        cp -r "$HOME/.local/share/gnome-shell/extensions" "$BACKUP_DIR/gnome/"
     fi
 
     print_success "Extensions GNOME sauvegardées"
@@ -195,6 +181,7 @@ backup_bottles() {
 }
 
 full_backup() {
+    BACKUP_DIR="$DEFAULT_BACKUP_BASE_DIR/backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$BACKUP_DIR"
 
     print_info "Début de la sauvegarde complète..."
@@ -215,21 +202,21 @@ EOF
     print_success "Sauvegarde complète terminée dans: $BACKUP_DIR"
 }
 
-### FONCTIONS DE RESTAURATION ###
 restore_deb_packages() {
     local backup_path="$1/deb"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde DEB introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde DEB introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration des paquets DEB..."
-
-    sudo cp "$backup_path/sources.list" /etc/apt/ 2>/dev/null || true
-    sudo cp -r "$backup_path/sources.list.d" /etc/apt/ 2>/dev/null || true
-
-    [ -f "$backup_path/apt_keys.gpg" ] && sudo apt-key add "$backup_path/apt_keys.gpg" 2>/dev/null || true
 
     if [ -f "$backup_path/packages_list.txt" ]; then
         sudo apt update
         sudo apt install -y $(awk '/install/ {print $1}' "$backup_path/packages_list.txt")
+    else
+        print_error "Échec de la restauration des paquets DEB : aucun fichier de paquets trouvé"
+        return 1
     fi
 
     print_success "Paquets DEB restaurés"
@@ -237,52 +224,58 @@ restore_deb_packages() {
 
 restore_flatpak() {
     local backup_path="$1/flatpak"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde Flatpak introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde Flatpak introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration des Flatpaks..."
 
-    while IFS=$'\t' read -r name url subset; do
-        [ "$name" != "Name" ] && flatpak remote-add --if-not-exists "$name" "$url"
-    done < "$backup_path/remotes.txt"
-
-    while IFS=$'\t' read -r app version branch origin; do
-        [ "$app" != "Application ID" ] && flatpak install -y "$origin" "$app"
-    done < "$backup_path/apps_list.txt"
+    if [ -f "$backup_path/apps_list.txt" ]; then
+        while IFS=$'\t' read -r app version branch origin; do
+            [ "$app" != "Application ID" ] && flatpak install -y "$origin" "$app"
+        done < "$backup_path/apps_list.txt"
+    else
+        print_error "Échec de la restauration des Flatpaks : fichier apps_list.txt introuvable"
+        return 1
+    fi
 
     print_success "Flatpaks restaurés"
 }
 
 restore_gnome_extensions() {
     local backup_path="$1/gnome"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde GNOME introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde GNOME introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration des extensions GNOME..."
 
     if [ -d "$backup_path/extensions" ]; then
         mkdir -p "$HOME/.local/share/gnome-shell/"
         cp -r "$backup_path/extensions" "$HOME/.local/share/gnome-shell/"
+    else
+        print_error "Échec de la restauration des extensions GNOME : répertoire extensions introuvable"
+        return 1
     fi
 
     if [ -f "$backup_path/extensions_config.dconf" ]; then
         dconf load /org/gnome/shell/extensions/ < "$backup_path/extensions_config.dconf"
+    else
+        print_error "Échec de la restauration des extensions GNOME : fichier extensions_config.dconf introuvable"
+        return 1
     fi
 
-    if [ -f "$backup_path/gnome_settings.dconf" ]; then
-        dconf load /org/gnome/ < "$backup_path/gnome_settings.dconf"
-    fi
-
-    if [ -f "$backup_path/extensions_list.txt" ]; then
-        while read -r ext_id; do
-            gnome-extensions enable "$ext_id" || true
-        done < "$backup_path/extensions_list.txt"
-    fi
-
-    print_success "Extensions GNOME restaurées - Redémarrez GNOME pour terminer"
+    print_success "Extensions GNOME restaurées"
 }
 
 restore_accounts() {
     local backup_path="$1/accounts"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde comptes introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde comptes introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration des comptes..."
 
@@ -294,27 +287,44 @@ restore_accounts() {
 
 restore_brave() {
     local backup_path="$1/brave"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde Brave introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde Brave introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration de Brave..."
 
     if ! flatpak list | grep -q com.brave.Browser; then
-        flatpak install -y flathub com.brave.Browser
+        print_warning "Brave Flatpak n'est pas installé"
+        read -p "Voulez-vous l'installer maintenant ? (o/N): " choice
+        if [[ "$choice" =~ ^[OoYy]$ ]]; then
+            flatpak install -y flathub com.brave.Browser || {
+                print_error "Échec de l'installation de Brave"
+                return 1
+            }
+        else
+            print_error "Impossible de restaurer sans Brave Flatpak"
+            return 1
+        fi
     fi
 
     local brave_dir="$HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"
     if [ -d "$backup_path/flatpak" ]; then
         mkdir -p "$brave_dir"
-        cp -r "$backup_path/flatpak/"* "$brave_dir/"
+        cp -r "$backup_path/flatpak/." "$brave_dir/"
         print_success "Brave (Flatpak) restauré"
     else
-        print_warning "Aucune donnée Brave Flatpak trouvée"
+        print_error "Échec de la restauration de Brave : répertoire flatpak introuvable"
+        return 1
     fi
 }
 
 restore_bottles() {
     local backup_path="$1/bottles"
-    [ -d "$backup_path" ] || { print_error "Sauvegarde Bottles introuvable"; return 1; }
+    if [ ! -d "$backup_path" ]; then
+        print_error "Répertoire de sauvegarde Bottles introuvable : $backup_path"
+        return 1
+    fi
 
     print_info "Restauration de Bottles..."
 
@@ -327,126 +337,57 @@ restore_bottles() {
 
     if [ -d "$backup_path/flatpak_data" ]; then
         mkdir -p "$bottles_data"
-        cp -r "$backup_path/flatpak_data/"* "$bottles_data/"
+        cp -r "$backup_path/flatpak_data/." "$bottles_data/"
     fi
 
     if [ -d "$backup_path/flatpak_config" ]; then
         mkdir -p "$bottles_config"
-        cp -r "$backup_path/flatpak_config/"* "$bottles_config/"
+        cp -r "$backup_path/flatpak_config/." "$bottles_config/"
     fi
 
     print_success "Bottles (Flatpak) restauré"
 }
 
-### FONCTIONS UTILITAIRES ###
-check_and_install_flatpak_apps() {
-    local missing_apps=()
-    local installed_apps=$(flatpak list --app --columns=application)
-
-    for app_name in "${!FLATPAK_APPS[@]}"; do
-        local app_id="${FLATPAK_APPS[$app_name]}"
-        if ! echo "$installed_apps" | grep -q "^$app_id$"; then
-            missing_apps+=("$app_name")
-        fi
-    done
-
-    if [ ${#missing_apps[@]} -gt 0 ]; then
-        print_warning "Applications Flatpak manquantes:"
-        printf " - %s\n" "${missing_apps[@]}"
-
-        read -p "Voulez-vous les installer ? (o/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[OoYy]$ ]]; then
-            for app_name in "${missing_apps[@]}"; do
-                local app_id="${FLATPAK_APPS[$app_name]}"
-                flatpak install -y flathub "$app_id"
-            done
-        fi
-    else
-        print_success "Toutes les applications Flatpak recommandées sont installées"
-    fi
-}
-
 list_backups() {
-    print_info "Liste des sauvegardes disponibles dans $DEFAULT_BACKUP_BASE_DIR:"
-    ls -l "$DEFAULT_BACKUP_BASE_DIR"
-}
+    print_info "Liste des sauvegardes disponibles dans $DEFAULT_BACKUP_BASE_DIR :"
+    local backups=($(ls -d "$DEFAULT_BACKUP_BASE_DIR"/backup_* 2>/dev/null | xargs -n 1 basename))
+    local i=1
 
-### MENUS ###
-backup_management_menu() {
-    while true; do
-        echo
-        echo "=== MENU DE GESTION DES SAUVEGARDES ==="
-        echo "1. Lister les sauvegardes disponibles"
-        echo "2. Supprimer une sauvegarde"
-        echo "3. Retour au menu principal"
-        echo
+    if [ ${#backups[@]} -eq 0 ]; then
+        print_warning "Aucune sauvegarde disponible."
+        return 1
+    fi
 
-        read -p "Choix (1-3): " choice
-        case $choice in
-            1)
-                print_info "Liste des sauvegardes disponibles dans $DEFAULT_BACKUP_BASE_DIR:"
-                ls -l "$DEFAULT_BACKUP_BASE_DIR"
-                ;;
-            2)
-                read -p "Nom du dossier de sauvegarde à supprimer: " backup_name
-                local backup_path="$DEFAULT_BACKUP_BASE_DIR/$backup_name"
-                if [ -d "$backup_path" ]; then
-                    sudo rm -rf "$backup_path" && print_success "Sauvegarde supprimée: $backup_name" || print_error "Échec de la suppression de la sauvegarde: $backup_name"
-                else
-                    print_error "Dossier de sauvegarde introuvable: $backup_name"
-                fi
-                ;;
-            3)
-                return
-                ;;
-            *)
-                print_error "Choix invalide"
-                ;;
-        esac
+    for backup in "${backups[@]}"; do
+        echo "$i) $backup"
+        ((i++))
     done
+
+    return 0
 }
 
-main_menu() {
-    while true; do
-        echo
-        echo "=== MENU PRINCIPAL ==="
-        echo "1. Effectuer une sauvegarde complète"
-        echo "2. Restaurer à partir d'une sauvegarde"
-        echo "3. Vérifier les applications Flatpak"
-        echo "4. Gérer les sauvegardes"
-        echo "5. Installer Ollama et Open WebUI"
-        echo "6. Télécharger les modèles"
-        echo "7. Quitter"
-        echo
+select_backup() {
+    local backup_choice
+    local backups=($(ls -d "$DEFAULT_BACKUP_BASE_DIR"/backup_* 2>/dev/null | xargs -n 1 basename))
+    local num_backups=${#backups[@]}
 
-        read -p "Choix (1-7): " choice
-        case $choice in
-            1) full_backup ;;
-            2) restore_menu ;;
-            3) check_and_install_flatpak_apps ;;
-            4) backup_management_menu ;;
-            5) install_ollama_and_openwebui ;;
-            6) download_models ;;
-            7)
-                print_info "${BLUE}Au revoir !${NC}"
-                exit 0
-                ;;
-            *) print_error "Choix invalide" ;;
-        esac
-    done
-}
+    if [ $num_backups -eq 0 ]; then
+        print_warning "Aucune sauvegarde disponible."
+        return 1
+    fi
 
-# Fonction pour télécharger les modèles
-download_models() {
-    print_info "Téléchargement des modèles..."
+    list_backups
 
-    # Téléchargement des modèles
-    ollama pull mistral
-    ollama pull llama3:3b
-    ollama pull llama3:8b
-    ollama pull deepseek-r1:8b
-    print_success "Modèles téléchargés avec succès."
+    read -p "Choisissez le numéro de la sauvegarde à utiliser (1-$num_backups): " backup_choice
+
+    if [[ "$backup_choice" =~ ^[0-9]+$ ]] && [ "$backup_choice" -ge 1 ] && [ "$backup_choice" -le $num_backups ]; then
+        BACKUP_DIR="$DEFAULT_BACKUP_BASE_DIR/${backups[$((backup_choice-1))]}"
+        print_success "Sauvegarde sélectionnée : $BACKUP_DIR"
+        return 0
+    else
+        print_error "Choix invalide."
+        return 1
+    fi
 }
 
 install_ollama_and_openwebui() {
@@ -514,23 +455,69 @@ services:
     restart: unless-stopped
 EOF
 
-    docker-compose pull
-    docker-compose up -d
+    docker compose pull
+    docker compose up -d
 
     print_success "Ollama et Open WebUI ont été installés et configurés avec succès."
 }
 
+download_models() {
+    print_info "Téléchargement des modèles..."
+    local models=("mistral" "llama3" "codellama" "deepseek-r1")
+    for model in "${models[@]}"; do
+        print_info "Téléchargement du modèle : $model:latest"
+        if ! ollama pull "$model:latest"; then
+            print_error "Échec du téléchargement du modèle : $model"
+        else
+            print_success "Modèle téléchargé avec succès : $model"
+        fi
+    done
+    print_success "Téléchargement des modèles terminé."
+}
+
+backup_management_menu() {
+    while true; do
+        echo
+        echo "=== MENU DE GESTION DES SAUVEGARDES ==="
+        echo "1. Lister les sauvegardes disponibles"
+        echo "2. Supprimer une sauvegarde"
+        echo "3. Sélectionner une sauvegarde pour la restauration"
+        echo "4. Retour au menu principal"
+        echo
+
+        read -p "Choix (1-4): " choice
+        case $choice in
+            1)
+                list_backups
+                ;;
+            2)
+                if select_backup; then
+                    read -p "Voulez-vous vraiment supprimer cette sauvegarde ? (o/N): " confirm
+                    if [[ "$confirm" =~ ^[OoYy]$ ]]; then
+                        sudo rm -rf "$BACKUP_DIR" && print_success "Sauvegarde supprimée: $BACKUP_DIR" || print_error "Échec de la suppression de la sauvegarde: $BACKUP_DIR"
+                    fi
+                fi
+                ;;
+            3)
+                if select_backup; then
+                    restore_menu "$BACKUP_DIR"
+                fi
+                ;;
+            4)
+                return
+                ;;
+            *)
+                print_error "Choix invalide"
+                ;;
+        esac
+    done
+}
+
 restore_menu() {
-    read -p "Chemin du dossier de sauvegarde (appuyez sur Entrée pour utiliser le chemin par défaut: $DEFAULT_BACKUP_BASE_DIR): " backup_dir
-
-    if [ -z "$backup_dir" ]; then
-        backup_dir="$DEFAULT_BACKUP_BASE_DIR"
-    fi
-
-    [ -d "$backup_dir" ] || {
-        print_error "Dossier introuvable: $backup_dir"
+    if ! select_backup; then
+        print_error "Aucune sauvegarde sélectionnée."
         return
-    }
+    fi
 
     echo
     echo "=== MENU DE RESTAURATION ==="
@@ -547,25 +534,82 @@ restore_menu() {
     read -p "Choix (1-8): " choice
     case $choice in
         1)
-            restore_deb_packages "$backup_dir"
-            restore_flatpak "$backup_dir"
-            restore_gnome_extensions "$backup_dir"
-            restore_accounts "$backup_dir"
-            restore_brave "$backup_dir"
-            restore_bottles "$backup_dir"
+            restore_deb_packages "$BACKUP_DIR"
+            restore_flatpak "$BACKUP_DIR"
+            restore_gnome_extensions "$BACKUP_DIR"
+            restore_accounts "$BACKUP_DIR"
+            restore_brave "$BACKUP_DIR"
+            restore_bottles "$BACKUP_DIR"
             ;;
-        2) restore_deb_packages "$backup_dir" ;;
-        3) restore_flatpak "$backup_dir" ;;
-        4) restore_gnome_extensions "$backup_dir" ;;
-        5) restore_accounts "$backup_dir" ;;
-        6) restore_brave "$backup_dir" ;;
-        7) restore_bottles "$backup_dir" ;;
+        2) restore_deb_packages "$BACKUP_DIR" ;;
+        3) restore_flatpak "$BACKUP_DIR" ;;
+        4) restore_gnome_extensions "$BACKUP_DIR" ;;
+        5) restore_accounts "$BACKUP_DIR" ;;
+        6) restore_brave "$BACKUP_DIR" ;;
+        7) restore_bottles "$BACKUP_DIR" ;;
         8) return ;;
         *) print_error "Choix invalide" ;;
     esac
 }
 
-### POINT D'ENTREE ###
+main_menu() {
+    while true; do
+        echo
+        echo "=== MENU PRINCIPAL ==="
+        echo "1. Effectuer une sauvegarde complète"
+        echo "2. Restaurer à partir d'une sauvegarde"
+        echo "3. Vérifier les applications Flatpak"
+        echo "4. Gérer les sauvegardes"
+        echo "5. Installer Ollama et Open WebUI"
+        echo "6. Télécharger les modèles"
+        echo "7. Quitter"
+        echo
+
+        read -p "Choix (1-7): " choice
+        case $choice in
+            1) full_backup ;;
+            2) restore_menu ;;
+            3) check_and_install_flatpak_apps ;;
+            4) backup_management_menu ;;
+            5) install_ollama_and_openwebui ;;
+            6) download_models ;;
+            7)
+                print_info "${BLUE}Au revoir !${NC}"
+                exit 0
+                ;;
+            *) print_error "Choix invalide" ;;
+        esac
+    done
+}
+
+check_and_install_flatpak_apps() {
+    local missing_apps=()
+    local installed_apps=$(flatpak list --app --columns=application)
+
+    for app_name in "${!FLATPAK_APPS[@]}"; do
+        local app_id="${FLATPAK_APPS[$app_name]}"
+        if ! echo "$installed_apps" | grep -q "^$app_id$"; then
+            missing_apps+=("$app_name")
+        fi
+    done
+
+    if [ ${#missing_apps[@]} -gt 0 ]; then
+        print_warning "Applications Flatpak manquantes:"
+        printf " - %s\n" "${missing_apps[@]}"
+
+        read -p "Voulez-vous les installer ? (o/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[OoYy]$ ]]; then
+            for app_name in "${missing_apps[@]}"; do
+                local app_id="${FLATPAK_APPS[$app_name]}"
+                flatpak install -y flathub "$app_id"
+            done
+        fi
+    else
+        print_success "Toutes les applications Flatpak recommandées sont installées"
+    fi
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     check_dependencies || {
         print_warning "Certaines dépendances sont manquantes - certaines fonctionnalités peuvent ne pas être disponibles"

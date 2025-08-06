@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Répertoires
-BACKUP_DIR="$HOME/gnome-extensions-backup"
+BACKUP_DIR="$HOME/Backups/gnome-extensions-backup"
 EXTENSIONS_DIR="$HOME/.local/share/gnome-shell/extensions"
 CONFIG_DIR="$HOME/.config"
 

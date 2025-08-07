@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script de sauvegarde et restauration des comptes et partages réseau GNOME
-# Auteur: Assistant Claude
+# Auteur: Fontaine Johnny
 # Version: 1.0
 
 # Couleurs pour l'affichage

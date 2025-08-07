@@ -1,41 +1,51 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Script complet de sauvegarde/restauration pour AnduinOS 1.3.3
-# Version: 4.0
+# G A G (Gestionnaire d'Applications GNOME) - Version Pro 4.0
+# Backup/Restauration modulaire avec système de sauvegardes multiples
 # Auteur: Fontaine Johnny
+# Date: 15/07/2024
 
-set -euo pipefail
+set -e
 
-# Configuration
-DEFAULT_BACKUP_BASE_DIR="$HOME/Backups/System"
-BACKUP_DIR=""
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# =====================================
+# CONFIGURATION
+# =====================================
 
-# Couleurs
+# Couleurs et styles
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+BOLD='\033[1m'
+UNDERLINE='\033[4m'
 
-# Fonctions d'affichage
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+# Emojis
+EMOJI_OK="✅"
+EMOJI_ERROR="❌"
+EMOJI_WARN="⚠️ "
+EMOJI_INFO="ℹ️ "
+EMOJI_CONFIG="⚙️ "
+EMOJI_BACKUP="📦"
+EMOJI_RESTORE="🔄"
+EMOJI_APPS="📱"
+EMOJI_DEB="📦"
+EMOJI_FLATPAK="📦"
+EMOJI_OLLAMA="🤖"
+EMOJI_PWSH="💻"
+EMOJI_STARTUP="🚀"
+EMOJI_BRAVE="🦁"
+EMOJI_BOTTLES="🍾"
+EMOJI_LIST="📋"
+EMOJI_CHECK="🔍"
 
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
+# Répertoires de sauvegarde
+BACKUP_BASE_DIR="$HOME/Backups/gnome-apps-backup"
+CURRENT_BACKUP=""
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Applications Flatpak
+# Applications Flatpak à gérer
 declare -A FLATPAK_APPS=(
     ["Arduino IDE 2"]="cc.arduino.IDE2"
     ["AnyDesk"]="com.anydesk.Anydesk"
@@ -43,610 +53,727 @@ declare -A FLATPAK_APPS=(
     ["Brave Browser"]="com.brave.Browser"
     ["Dropbox"]="com.dropbox.Client"
     ["Flatseal"]="com.github.tchx84.Flatseal"
-    ["Android Studio"]="com.google.AndroidStudio"
-    ["FinalShell"]="com.hostbuf.FinalShell"
-    ["Alpaca"]="com.jeffser.Alpaca"
-    ["PyCharm Community"]="com.jetbrains.PyCharm-Community"
-    ["Extension Manager"]="com.mattjakeman.ExtensionManager"
-    ["OBS Studio"]="com.obsproject.Studio"
-    ["Proton VPN"]="com.protonvpn.www"
-    ["ZapZap"]="com.rtosta.zapzap"
     ["Bottles"]="com.usebottles.bottles"
-    ["ZetaOffice"]="de.allotropia.ZetaOffice"
-    ["Shortwave"]="de.haeckerfelix.Shortwave"
-    ["GPU Viewer"]="io.github.arunsivaramanneo.GPUViewer"
-    ["Cohesion"]="io.github.brunofin.Cohesion"
-    ["Flatsweep"]="io.github.giantpinkrobots.flatsweep"
-    ["Follamac"]="io.github.pejuko.follamac"
-    ["Newelle"]="io.gitlab.adhami3310.Impression"
-    ["Proton Mail"]="me.proton.Mail"
-    ["Proton Pass"]="me.proton.Pass"
-    ["Remote Desktop Manager"]="net.devolutions.RDM"
-    ["OpenTodoList"]="net.rpdev.OpenTodoList"
-    ["Angry IP Scanner"]="org.angryip.ipscan"
-    ["Fritzing"]="org.fritzing.Fritzing"
-    ["Boxes"]="org.gnome.Boxes"
-    ["Firmware"]="org.gnome.Firmware"
-    ["Thunderbird"]="org.mozilla.Thunderbird"
-    ["OnlyOffice"]="org.onlyoffice.desktopeditors"
-    ["Zoom"]="us.zoom.Zoom"
+    # ... (autres applications)
 )
 
-check_dependencies() {
-    local missing=0
-    local required=("flatpak" "rsync" "dconf" "gnome-extensions")
+# Modèles Ollama recommandés
+declare -a OLLAMA_MODELS=(
+    "llama3.1:8b"
+    "codellama:7b"
+    "mistral:7b"
+    # ... (autres modèles)
+)
 
-    for cmd in "${required[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            print_error "Dépendance manquante: $cmd"
-            ((missing++))
+# Applications tierces à vérifier
+declare -A THIRD_PARTY_APPS=(
+    ["Outlook"]="outlook"
+    ["Microsoft Teams"]="teams"
+    ["OpenFortiGUI"]="openfortigui"
+    ["Ollama"]="ollama"
+    ["Open WebUI"]="open-webui"
+    ["PowerShell"]="pwsh"
+)
+
+# =====================================
+# FONCTIONS UTILITAIRES
+# =====================================
+
+print_header() {
+    echo -e "${PURPLE}${BOLD}${UNDERLINE}$1${NC}"
+}
+
+print_section() {
+    echo -e "\n${CYAN}${BOLD}$1${NC}"
+}
+
+print_info() {
+    echo -e "${BLUE}${EMOJI_INFO} [INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}${EMOJI_OK} [SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}${EMOJI_WARN} [WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}${EMOJI_ERROR} [ERROR]${NC} $1"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+select_backup_dir() {
+    local backups=()
+    local count=1
+
+    print_section "${EMOJI_LIST} Liste des sauvegardes disponibles"
+    
+    if [ ! -d "$BACKUP_BASE_DIR" ]; then
+        print_error "Aucune sauvegarde disponible"
+        return 1
+    fi
+
+    while IFS= read -r -d '' dir; do
+        if [ -d "$dir" ] && [ "$(basename "$dir")" != "gnome-apps-backup" ]; then
+            backups+=("$dir")
+            echo -e "${CYAN}${count}.${NC} $(basename "$dir")"
+            ((count++))
+        fi
+    done < <(find "$BACKUP_BASE_DIR" -maxdepth 1 -type d -print0 2>/dev/null | sort -z)
+
+    if [ ${#backups[@]} -eq 0 ]; then
+        print_error "Aucune sauvegarde disponible"
+        return 1
+    fi
+
+    echo -ne "${YELLOW}${BOLD}Sélectionnez une sauvegarde [1-${#backups[@]}]: ${NC}"
+    read -r choice
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#backups[@]} ]; then
+        CURRENT_BACKUP="${backups[$((choice-1))]}"
+        print_success "Sauvegarde sélectionnée: $(basename "$CURRENT_BACKUP")"
+        return 0
+    else
+        print_error "Sélection invalide"
+        return 1
+    fi
+}
+
+create_backup_dir() {
+    local timestamp=$(date +"%Y%m%d_%H%M%S")
+    CURRENT_BACKUP="$BACKUP_BASE_DIR/$timestamp"
+    mkdir -p "$CURRENT_BACKUP"
+    print_success "Nouvelle sauvegarde créée: $timestamp"
+}
+
+# =====================================
+# FONCTIONS DE VÉRIFICATION
+# =====================================
+
+check_requirements() {
+    print_section "${EMOJI_CHECK} Vérification des prérequis système"
+    
+    local missing=()
+    local to_install=()
+    
+    # Vérifier les outils de base
+    declare -a required_tools=("curl" "wget" "git")
+    
+    for tool in "${required_tools[@]}"; do
+        if ! command_exists "$tool"; then
+            missing+=("$tool")
+            to_install+=("$tool")
+            print_warning "$tool n'est pas installé"
         fi
     done
-
-    if [ $missing -gt 0 ]; then
-        print_warning "Installez les dépendances manquantes avec:"
-        print_info "sudo apt install flatpak rsync dconf-cli gnome-shell-utils"
-        return 1
-    fi
-    return 0
-}
-
-backup_deb_packages() {
-    print_info "Sauvegarde des paquets DEB..."
-    mkdir -p "$BACKUP_DIR/deb"
-
-    dpkg --get-selections > "$BACKUP_DIR/deb/packages_list.txt"
-    dpkg -l > "$BACKUP_DIR/deb/packages_detailed.txt"
-    sudo cp -r /etc/apt/sources.list* "$BACKUP_DIR/deb/" 2>/dev/null || true
-    sudo cp -r /etc/apt/trusted.gpg* "$BACKUP_DIR/deb/" 2>/dev/null || true
-    apt-key exportall > "$BACKUP_DIR/deb/apt_keys.gpg" 2>/dev/null || true
-
-    print_success "Paquets DEB sauvegardés"
-}
-
-backup_flatpak() {
-    print_info "Sauvegarde des applications Flatpak..."
-    mkdir -p "$BACKUP_DIR/flatpak"
-
-    flatpak list --app --columns=application,version,branch,origin > "$BACKUP_DIR/flatpak/apps_list.txt"
-    flatpak remotes --columns=name,url,subset > "$BACKUP_DIR/flatpak/remotes.txt"
-
-    print_success "Applications Flatpak sauvegardées"
-}
-
-backup_gnome_extensions() {
-    print_info "Sauvegarde des extensions GNOME..."
     
-    # Vérifier que GNOME Shell est en cours d'exécution
-    if ! pgrep -x "gnome-shell" > /dev/null; then
-        print_warning "GNOME Shell n'est pas en cours d'exécution. Les extensions GNOME ne seront pas sauvegardées."
-        return 1
+    # Vérifier Flatpak
+    if ! command_exists "flatpak"; then
+        print_warning "Flatpak n'est pas installé - nécessaire pour de nombreuses applications"
+        to_install+=("flatpak")
     fi
     
-    # Vérifier les dépendances
-    if ! command -v gnome-extensions >/dev/null 2>&1; then
-        print_error "gnome-extensions n'est pas installé"
-        return 1
+    # Vérifier Docker
+    if ! command_exists "docker"; then
+        print_warning "Docker n'est pas installé - nécessaire pour Open WebUI"
     fi
     
-    if ! command -v dconf >/dev/null 2>&1; then
-        print_error "dconf n'est pas installé"
-        return 1
+    # Vérifier Ollama
+    if ! command_exists "ollama"; then
+        print_warning "Ollama n'est pas installé - nécessaire pour les modèles IA"
     fi
     
-    mkdir -p "$BACKUP_DIR/gnome" || {
-        print_error "Impossible de créer le répertoire de sauvegarde"
-        return 1
-    }
-    
-    # Sauvegarder la liste des extensions
-    if ! gnome-extensions list > "$BACKUP_DIR/gnome/extensions_list.txt" 2>/dev/null; then
-        print_error "Erreur lors de la récupération de la liste des extensions"
-        return 1
-    fi
-    
-    # Sauvegarder la configuration des extensions avec gestion d'erreur
-    if ! dconf dump /org/gnome/shell/extensions/ > "$BACKUP_DIR/gnome/extensions_config.dconf" 2>/dev/null; then
-        print_warning "Impossible de sauvegarder la configuration des extensions"
-    fi
-    
-    # Sauvegarder les paramètres GNOME généraux
-    if ! dconf dump /org/gnome/ > "$BACKUP_DIR/gnome/gnome_settings.dconf" 2>/dev/null; then
-        print_warning "Impossible de sauvegarder les paramètres GNOME"
-    fi
-    
-    # Sauvegarder les fichiers des extensions avec vérification de taille
-    if [ -d "$HOME/.local/share/gnome-shell/extensions" ]; then
-        local ext_size=$(du -sm "$HOME/.local/share/gnome-shell/extensions" 2>/dev/null | cut -f1)
-        if [ "${ext_size:-0}" -gt 100 ]; then
-            print_warning "Le dossier extensions est volumineux (${ext_size}MB). Création d'une archive..."
-            tar -czf "$BACKUP_DIR/gnome/extensions.tar.gz" -C "$HOME/.local/share/gnome-shell" extensions 2>/dev/null || {
-                print_warning "Impossible de créer l'archive des extensions"
-            }
-        else
-            cp -r "$HOME/.local/share/gnome-shell/extensions" "$BACKUP_DIR/gnome/" 2>/dev/null || {
-                print_warning "Impossible de copier le dossier extensions"
-            }
+    if [ ${#to_install[@]} -gt 0 ]; then
+        print_warning "Outils manquants: ${missing[*]}"
+        echo -ne "${YELLOW}Voulez-vous les installer automatiquement? [y/N]: ${NC}"
+        read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            if command_exists apt; then
+                sudo apt update
+                sudo apt install -y "${to_install[@]}"
+                print_success "Outils installés avec succès"
+            elif command_exists dnf; then
+                sudo dnf install -y "${to_install[@]}"
+                print_success "Outils installés avec succès"
+            elif command_exists pacman; then
+                sudo pacman -S --noconfirm "${to_install[@]}"
+                print_success "Outils installés avec succès"
+            else
+                print_error "Gestionnaire de paquets non supporté. Veuillez installer manuellement: ${to_install[*]}"
+            fi
         fi
+    else
+        print_success "Tous les prérequis système sont satisfaits"
+    fi
+}
+
+check_installed_apps() {
+    print_section "${EMOJI_CHECK} Vérification des applications installées"
+    
+    print_info "${EMOJI_DEB} Applications DEB:"
+    if command_exists dpkg; then
+        dpkg --get-selections | head -n 10
+        echo "... (plus dans le rapport complet)"
+    else
+        print_warning "dpkg non disponible"
     fi
     
-    print_success "Extensions GNOME sauvegardées"
-
-backup_accounts() {
-    print_info "Sauvegarde des comptes..."
-    mkdir -p "$BACKUP_DIR/accounts"
-
-    [ -d "$HOME/.config/goa-1.0" ] && cp -r "$HOME/.config/goa-1.0" "$BACKUP_DIR/accounts/"
-    [ -d "$HOME/.thunderbird" ] && cp -r "$HOME/.thunderbird" "$BACKUP_DIR/accounts/"
-
-    print_success "Comptes sauvegardés"
+    print_info "\n${EMOJI_FLATPAK} Applications Flatpak:"
+    if command_exists flatpak; then
+        flatpak list --app --columns=application 2>/dev/null | head -n 10
+        echo "... (plus dans le rapport complet)"
+    else
+        print_warning "Flatpak non installé"
+    fi
+    
+    print_info "\n${EMOJI_INFO} Applications tierces:"
+    for app in "${!THIRD_PARTY_APPS[@]}"; do
+        if command_exists "${THIRD_PARTY_APPS[$app]}"; then
+            echo -e "${GREEN}${EMOJI_OK} $app${NC}"
+        else
+            echo -e "${RED}${EMOJI_ERROR} $app (manquant)${NC}"
+        fi
+    done
+    
+    print_info "\n${EMOJI_WARN} Recommandations:"
+    if ! command_exists "ollama"; then
+        echo "- Installez Ollama pour les fonctionnalités IA"
+    fi
+    if ! command_exists "docker"; then
+        echo "- Installez Docker pour exécuter Open WebUI"
+    fi
+    if command_exists flatpak && ! flatpak list 2>/dev/null | grep -q "com.brave.Browser"; then
+        echo "- Brave Browser n'est pas installé (recommandé)"
+    fi
 }
+
+# =====================================
+# SAUVEGARDES SPÉCIFIQUES
+# =====================================
 
 backup_brave() {
-    print_info "Sauvegarde de Brave..."
-    mkdir -p "$BACKUP_DIR/brave"
-
-    local brave_dir="$HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"
-    if [ -d "$brave_dir" ]; then
-        rsync -a --exclude={"Cache","Code Cache"} "$brave_dir/" "$BACKUP_DIR/brave/flatpak/"
-        echo "flatpak" > "$BACKUP_DIR/brave/install_type.txt"
-        print_success "Brave (Flatpak) sauvegardé"
+    print_section "${EMOJI_BRAVE} Sauvegarde de Brave Browser (Flatpak)"
+    
+    local config_dir="$CURRENT_BACKUP/brave"
+    mkdir -p "$config_dir"
+    
+    # Sauvegarde des données Brave Flatpak
+    local brave_data_dir="$HOME/.var/app/com.brave.Browser"
+    if [ -d "$brave_data_dir" ]; then
+        cp -r "$brave_data_dir" "$config_dir" && \
+        print_success "Données Brave sauvegardées"
     else
-        print_warning "Brave Flatpak non trouvé"
+        print_warning "Aucune donnée Brave trouvée"
+    fi
+    
+    # Sauvegarde des préférences
+    if command_exists dconf; then
+        dconf dump /com/brave/ > "$config_dir/brave-settings.dconf" 2>/dev/null && \
+        print_success "Préférences Brave sauvegardées" || \
+        print_warning "Aucune préférence Brave à sauvegarder"
+    else
+        print_warning "dconf non disponible pour sauvegarder les préférences"
     fi
 }
 
 backup_bottles() {
-    print_info "Sauvegarde de Bottles..."
-    mkdir -p "$BACKUP_DIR/bottles"
-
-    local bottles_data="$HOME/.var/app/com.usebottles.bottles/data/bottles"
+    print_section "${EMOJI_BOTTLES} Sauvegarde de Bottles"
+    
+    local config_dir="$CURRENT_BACKUP/bottles"
+    mkdir -p "$config_dir"
+    
+    # Sauvegarde des bouteilles
+    local bottles_dir="$HOME/.var/app/com.usebottles.bottles/data/bottles"
+    if [ -d "$bottles_dir" ]; then
+        cp -r "$bottles_dir" "$config_dir" && \
+        print_success "Bouteilles Bottles sauvegardées"
+    else
+        print_warning "Aucune bouteille Bottles trouvée"
+    fi
+    
+    # Sauvegarde de la configuration
     local bottles_config="$HOME/.var/app/com.usebottles.bottles/config"
+    if [ -d "$bottles_config" ]; then
+        cp -r "$bottles_config" "$config_dir" && \
+        print_success "Configuration Bottles sauvegardée"
+    fi
+}
 
-    if [ -d "$bottles_data" ]; then
-        rsync -a "$bottles_data/" "$BACKUP_DIR/bottles/flatpak_data/"
-        rsync -a "$bottles_config/" "$BACKUP_DIR/bottles/flatpak_config/"
-        echo "flatpak" > "$BACKUP_DIR/bottles/install_type.txt"
-        print_success "Bottles (Flatpak) sauvegardé"
+backup_startup_apps() {
+    print_section "${EMOJI_STARTUP} Sauvegarde des applications de démarrage"
+    
+    local startup_dir="$CURRENT_BACKUP/startup"
+    mkdir -p "$startup_dir"
+    
+    # Sauvegarde des applications de démarrage
+    if [ -d "$HOME/.config/autostart" ]; then
+        cp -r "$HOME/.config/autostart" "$startup_dir" && \
+        print_success "Applications de démarrage sauvegardées"
     else
-        print_warning "Bottles Flatpak non trouvé"
+        print_warning "Aucune application de démarrage trouvée"
     fi
 }
 
-full_backup() {
-    BACKUP_DIR="$DEFAULT_BACKUP_BASE_DIR/backup_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-
-    print_info "Début de la sauvegarde complète..."
-
-    backup_deb_packages
-    backup_flatpak
-    backup_gnome_extensions
-    backup_accounts
-    backup_brave
-    backup_bottles
-
-    cat > "$BACKUP_DIR/backup_info.txt" <<EOF
-Sauvegarde créée le: $(date)
-Système: $(lsb_release -d | cut -f2)
-Utilisateur: $USER
-EOF
-
-    print_success "Sauvegarde complète terminée dans: $BACKUP_DIR"
-}
-
-restore_deb_packages() {
-    local backup_path="$1/deb"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde DEB introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration des paquets DEB..."
-
-    if [ -f "$backup_path/packages_list.txt" ]; then
-        sudo apt update
-        sudo apt install -y $(awk '/install/ {print $1}' "$backup_path/packages_list.txt")
+backup_ollama() {
+    print_section "${EMOJI_OLLAMA} Sauvegarde d'Ollama"
+    
+    local config_dir="$CURRENT_BACKUP/ollama"
+    mkdir -p "$config_dir"
+    
+    # Sauvegarde des modèles
+    if command_exists ollama; then
+        ollama list > "$config_dir/models.txt" 2>/dev/null && \
+        print_success "Liste des modèles sauvegardée" || \
+        print_warning "Impossible de sauvegarder la liste des modèles"
     else
-        print_error "Échec de la restauration des paquets DEB : aucun fichier de paquets trouvé"
-        return 1
+        print_warning "Ollama n'est pas installé"
     fi
-
-    print_success "Paquets DEB restaurés"
-}
-
-restore_flatpak() {
-    local backup_path="$1/flatpak"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde Flatpak introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration des Flatpaks..."
-
-    if [ -f "$backup_path/apps_list.txt" ]; then
-        while IFS=$'\t' read -r app version branch origin; do
-            [ "$app" != "Application ID" ] && flatpak install -y "$origin" "$app"
-        done < "$backup_path/apps_list.txt"
+    
+    # Sauvegarde de la configuration
+    if [ -d "$HOME/.ollama" ]; then
+        cp -r "$HOME/.ollama" "$config_dir" && \
+        print_success "Configuration Ollama sauvegardée"
     else
-        print_error "Échec de la restauration des Flatpaks : fichier apps_list.txt introuvable"
-        return 1
+        print_warning "Aucune configuration Ollama trouvée"
     fi
-
-    print_success "Flatpaks restaurés"
 }
 
-restore_gnome_extensions() {
-    local backup_path="$1/gnome"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde GNOME introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration des extensions GNOME..."
-
-    if [ -d "$backup_path/extensions" ]; then
-        mkdir -p "$HOME/.local/share/gnome-shell/"
-        cp -r "$backup_path/extensions" "$HOME/.local/share/gnome-shell/"
-    else
-        print_error "Échec de la restauration des extensions GNOME : répertoire extensions introuvable"
-        return 1
-    fi
-
-    if [ -f "$backup_path/extensions_config.dconf" ]; then
-        dconf load /org/gnome/shell/extensions/ < "$backup_path/extensions_config.dconf"
-    else
-        print_error "Échec de la restauration des extensions GNOME : fichier extensions_config.dconf introuvable"
-        return 1
-    fi
-
-    print_success "Extensions GNOME restaurées"
-}
-
-restore_accounts() {
-    local backup_path="$1/accounts"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde comptes introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration des comptes..."
-
-    [ -d "$backup_path/goa-1.0" ] && cp -r "$backup_path/goa-1.0" "$HOME/.config/"
-    [ -d "$backup_path/.thunderbird" ] && cp -r "$backup_path/.thunderbird" "$HOME/"
-
-    print_success "Comptes restaurés"
-}
+# =====================================
+# RESTAURATIONS SPÉCIFIQUES
+# =====================================
 
 restore_brave() {
-    local backup_path="$1/brave"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde Brave introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration de Brave..."
-
-    if ! flatpak list | grep -q com.brave.Browser; then
-        print_warning "Brave Flatpak n'est pas installé"
-        read -p "Voulez-vous l'installer maintenant ? (o/N): " choice
-        if [[ "$choice" =~ ^[OoYy]$ ]]; then
-            flatpak install -y flathub com.brave.Browser || {
-                print_error "Échec de l'installation de Brave"
-                return 1
-            }
-        else
-            print_error "Impossible de restaurer sans Brave Flatpak"
-            return 1
-        fi
-    fi
-
-    local brave_dir="$HOME/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"
-    if [ -d "$backup_path/flatpak" ]; then
-        mkdir -p "$brave_dir"
-        cp -r "$backup_path/flatpak/." "$brave_dir/"
-        print_success "Brave (Flatpak) restauré"
+    print_section "${EMOJI_BRAVE} Restauration de Brave Browser"
+    
+    local config_dir="$CURRENT_BACKUP/brave"
+    
+    if [ -d "$config_dir/com.brave.Browser" ]; then
+        # Restauration des données
+        mkdir -p "$HOME/.var/app"
+        cp -r "$config_dir/com.brave.Browser" "$HOME/.var/app/" && \
+        print_success "Données Brave restaurées"
     else
-        print_error "Échec de la restauration de Brave : répertoire flatpak introuvable"
-        return 1
+        print_warning "Aucune donnée Brave à restaurer"
+    fi
+    
+    if [ -f "$config_dir/brave-settings.dconf" ] && command_exists dconf; then
+        # Restauration des préférences
+        dconf load /com/brave/ < "$config_dir/brave-settings.dconf" && \
+        print_success "Préférences Brave restaurées"
+    else
+        print_warning "Aucune préférence Brave à restaurer"
     fi
 }
 
 restore_bottles() {
-    local backup_path="$1/bottles"
-    if [ ! -d "$backup_path" ]; then
-        print_error "Répertoire de sauvegarde Bottles introuvable : $backup_path"
-        return 1
-    fi
-
-    print_info "Restauration de Bottles..."
-
-    if ! flatpak list | grep -q com.usebottles.bottles; then
-        flatpak install -y flathub com.usebottles.bottles
-    fi
-
-    local bottles_data="$HOME/.var/app/com.usebottles.bottles/data/bottles"
-    local bottles_config="$HOME/.var/app/com.usebottles.bottles/config"
-
-    if [ -d "$backup_path/flatpak_data" ]; then
-        mkdir -p "$bottles_data"
-        cp -r "$backup_path/flatpak_data/." "$bottles_data/"
-    fi
-
-    if [ -d "$backup_path/flatpak_config" ]; then
-        mkdir -p "$bottles_config"
-        cp -r "$backup_path/flatpak_config/." "$bottles_config/"
-    fi
-
-    print_success "Bottles (Flatpak) restauré"
-}
-
-list_backups() {
-    print_info "Liste des sauvegardes disponibles dans $DEFAULT_BACKUP_BASE_DIR :"
-    local backups=($(ls -d "$DEFAULT_BACKUP_BASE_DIR"/backup_* 2>/dev/null | xargs -n 1 basename))
-    local i=1
-
-    if [ ${#backups[@]} -eq 0 ]; then
-        print_warning "Aucune sauvegarde disponible."
-        return 1
-    fi
-
-    for backup in "${backups[@]}"; do
-        echo "$i) $backup"
-        ((i++))
-    done
-
-    return 0
-}
-
-select_backup() {
-    local backup_choice
-    local backups=($(ls -d "$DEFAULT_BACKUP_BASE_DIR"/backup_* 2>/dev/null | xargs -n 1 basename))
-    local num_backups=${#backups[@]}
-
-    if [ $num_backups -eq 0 ]; then
-        print_warning "Aucune sauvegarde disponible."
-        return 1
-    fi
-
-    list_backups
-
-    read -p "Choisissez le numéro de la sauvegarde à utiliser (1-$num_backups): " backup_choice
-
-    if [[ "$backup_choice" =~ ^[0-9]+$ ]] && [ "$backup_choice" -ge 1 ] && [ "$backup_choice" -le $num_backups ]; then
-        BACKUP_DIR="$DEFAULT_BACKUP_BASE_DIR/${backups[$((backup_choice-1))]}"
-        print_success "Sauvegarde sélectionnée : $BACKUP_DIR"
-        return 0
+    print_section "${EMOJI_BOTTLES} Restauration de Bottles"
+    
+    local config_dir="$CURRENT_BACKUP/bottles"
+    
+    if [ -d "$config_dir/bottles" ]; then
+        # Restauration des bouteilles
+        mkdir -p "$HOME/.var/app/com.usebottles.bottles/data"
+        cp -r "$config_dir/bottles" "$HOME/.var/app/com.usebottles.bottles/data/" && \
+        print_success "Bouteilles Bottles restaurées"
     else
-        print_error "Choix invalide."
-        return 1
+        print_warning "Aucune bouteille à restaurer"
+    fi
+    
+    if [ -d "$config_dir/config" ]; then
+        # Restauration de la configuration
+        mkdir -p "$HOME/.var/app/com.usebottles.bottles"
+        cp -r "$config_dir/config" "$HOME/.var/app/com.usebottles.bottles/" && \
+        print_success "Configuration Bottles restaurée"
+    else
+        print_warning "Aucune configuration à restaurer"
     fi
 }
 
-install_ollama_and_openwebui() {
-    print_info "Installation et configuration d'Ollama et Open WebUI..."
-
-    # Installation d'Ollama
-    print_info "Installation d'Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh
-
-    # Configuration d'Ollama en tant que service
-    print_info "Configuration d'Ollama en tant que service..."
-    sudo tee /etc/systemd/system/ollama.service > /dev/null <<EOL
-[Unit]
-Description=Ollama Service
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/ollama serve
-User=$USER
-Group=$USER
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable ollama.service
-    sudo systemctl start ollama.service
-
-    # Installation de Docker
-    print_info "Installation de Docker..."
-    sudo apt-get update
-    sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-    sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-    sudo apt-get update
-    sudo apt-get install -y docker-ce
-    sudo systemctl enable docker
-    sudo systemctl start docker
-
-    # Installation de Docker Compose
-    print_info "Installation de Docker Compose..."
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
-
-    # Configuration d'Open WebUI
-    print_info "Configuration d'Open WebUI..."
-    mkdir -p ~/open-webui
-    cd ~/open-webui
-
-    cat > docker-compose.yml <<EOF
-version: '3.8'
-
-services:
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    ports:
-      - "3000:8080"
-    environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-EOF
-
-    docker compose pull
-    docker compose up -d
-
-    print_success "Ollama et Open WebUI ont été installés et configurés avec succès."
+restore_startup_apps() {
+    print_section "${EMOJI_STARTUP} Restauration des applications de démarrage"
+    
+    local config_dir="$CURRENT_BACKUP/startup"
+    
+    if [ -d "$config_dir/autostart" ]; then
+        mkdir -p "$HOME/.config"
+        cp -r "$config_dir/autostart" "$HOME/.config/" && \
+        print_success "Applications de démarrage restaurées"
+    else
+        print_warning "Aucune application de démarrage à restaurer"
+    fi
 }
 
-download_models() {
-    print_info "Téléchargement des modèles..."
-    local models=("mistral" "llama3" "codellama" "deepseek-r1")
-    for model in "${models[@]}"; do
-        print_info "Téléchargement du modèle : $model:latest"
-        if ! ollama pull "$model:latest"; then
-            print_error "Échec du téléchargement du modèle : $model"
-        else
-            print_success "Modèle téléchargé avec succès : $model"
+restore_ollama() {
+    print_section "${EMOJI_OLLAMA} Restauration d'Ollama"
+    
+    local config_dir="$CURRENT_BACKUP/ollama"
+    
+    if [ -d "$config_dir" ]; then
+        # Restauration de la configuration
+        if [ -d "$config_dir/.ollama" ]; then
+            mkdir -p "$HOME"
+            cp -r "$config_dir/.ollama" "$HOME/" && \
+            print_success "Configuration Ollama restaurée"
         fi
-    done
-    print_success "Téléchargement des modèles terminé."
+        
+        # Restauration des modèles
+        if [ -f "$config_dir/models.txt" ] && command_exists ollama; then
+            print_info "Téléchargement des modèles Ollama..."
+            while read -r model; do
+                if [ -n "$model" ]; then
+                    ollama pull "$model" || print_warning "Impossible de télécharger le modèle: $model"
+                fi
+            done < "$config_dir/models.txt"
+            print_success "Modèles Ollama restaurés"
+        fi
+    else
+        print_warning "Aucune sauvegarde Ollama à restaurer"
+    fi
 }
 
-backup_management_menu() {
-    while true; do
-        echo
-        echo "=== MENU DE GESTION DES SAUVEGARDES ==="
-        echo "1. Lister les sauvegardes disponibles"
-        echo "2. Supprimer une sauvegarde"
-        echo "3. Sélectionner une sauvegarde pour la restauration"
-        echo "4. Retour au menu principal"
-        echo
+# =====================================
+# APPLICATIONS TIERCES
+# =====================================
 
-        read -p "Choix (1-4): " choice
+install_outlook() {
+    print_info "Installation d'Outlook..."
+    
+    # Téléchargement et installation du package Outlook
+    if command_exists apt; then
+        mkdir -p ~/Downloads
+        wget -O ~/Downloads/outlook.deb "https://outlook.office.com/owa/download?ft=2" || {
+            print_error "Échec du téléchargement d'Outlook"
+            return 1
+        }
+        sudo apt install -y ~/Downloads/outlook.deb && {
+            rm ~/Downloads/outlook.deb
+            print_success "Outlook installé avec succès"
+        } || {
+            print_error "Échec de l'installation d'Outlook"
+        }
+    else
+        print_error "Installation d'Outlook non supportée sur ce système"
+    fi
+}
+
+install_teams() {
+    print_info "Installation de Microsoft Teams..."
+    
+    # Installation de Teams via Flatpak
+    if command_exists flatpak; then
+        flatpak install -y flathub com.microsoft.Teams && \
+        print_success "Microsoft Teams installé avec succès" || \
+        print_error "Échec de l'installation de Teams"
+    else
+        print_error "Flatpak n'est pas installé. Impossible d'installer Teams."
+    fi
+}
+
+install_openfortigui() {
+    print_info "Installation d'OpenFortiGUI..."
+    
+    # Ajout du PPA et installation
+    if command_exists apt; then
+        sudo add-apt-repository -y ppa:openfortivpn/openfortivpn && \
+        sudo apt update && \
+        sudo apt install -y openfortigui && \
+        print_success "OpenFortiGUI installé avec succès" || \
+        print_error "Échec de l'installation d'OpenFortiGUI"
+    else
+        print_error "Installation d'OpenFortiGUI non supportée sur ce système"
+    fi
+}
+
+install_ollama_stack() {
+    print_info "Installation d'Ollama..."
+    
+    # Installation d'Ollama
+    curl -fsSL https://ollama.com/install.sh | sh && \
+    print_success "Ollama installé avec succès" || {
+        print_error "Échec de l'installation d'Ollama"
+        return 1
+    }
+    
+    # Démarrer le service Ollama
+    if command_exists systemctl; then
+        sudo systemctl enable ollama || print_warning "Impossible d'activer le service Ollama"
+        sudo systemctl start ollama || print_warning "Impossible de démarrer le service Ollama"
+    fi
+    
+    print_info "Installation d'Open WebUI..."
+    
+    # Installation d'Open WebUI avec Docker
+    if command_exists docker; then
+        docker run -d \
+            --network=host \
+            -v open-webui:/app/backend/data \
+            -e OLLAMA_BASE_URL=http://127.0.0.1:11434 \
+            --name open-webui \
+            --restart always \
+            ghcr.io/open-webui/open-webui:main && {
+            print_success "Open WebUI installé avec succès"
+            print_info "Accédez à l'interface sur: http://localhost:8080"
+        } || {
+            print_error "Échec de l'installation d'Open WebUI"
+        }
+    else
+        print_error "Docker n'est pas installé. Impossible d'installer Open WebUI."
+    fi
+}
+
+install_powershell() {
+    print_info "Installation de PowerShell..."
+    
+    # Installation de PowerShell
+    if command_exists apt; then
+        # Importation de la clé GPG de Microsoft
+        wget -O- https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft.gpg && \
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/microsoft-debian-$(lsb_release -cs)-prod $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/microsoft.list && \
+        sudo apt update && \
+        sudo apt install -y powershell && \
+        print_success "PowerShell installé avec succès" || \
+        print_error "Échec de l'installation de PowerShell"
+    elif command_exists dnf; then
+        sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc && \
+        curl -sSL https://packages.microsoft.com/config/rhel/$(rpm -E %rhel)/prod.repo | sudo tee /etc/yum.repos.d/microsoft.repo && \
+        sudo dnf install -y powershell && \
+        print_success "PowerShell installé avec succès" || \
+        print_error "Échec de l'installation de PowerShell"
+    else
+        print_error "Installation de PowerShell non supportée sur ce système"
+    fi
+}
+
+# =====================================
+# MENU APPLICATIONS TIERCES
+# =====================================
+
+install_third_party() {
+    while true; do
+        clear
+        echo -e "${PURPLE}${BOLD}Menu Applications Tierces${NC}"
+        echo -e "${CYAN} 1. ${EMOJI_APPS} Installer Outlook"
+        echo -e "${CYAN} 2. ${EMOJI_APPS} Installer Microsoft Teams"
+        echo -e "${CYAN} 3. ${EMOJI_APPS} Installer OpenFortiGUI"
+        echo -e "${CYAN} 4. ${EMOJI_OLLAMA} Installer Ollama + Open WebUI"
+        echo -e "${CYAN} 5. ${EMOJI_PWSH} Installer PowerShell"
+        echo -e "${CYAN} 6. ${EMOJI_INFO} Retour au menu principal"
+        echo -ne "${YELLOW}${BOLD}Choisissez une option [1-6]: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) install_outlook ;;
+            2) install_teams ;;
+            3) install_openfortigui ;;
+            4) install_ollama_stack ;;
+            5) install_powershell ;;
+            6) return ;;
+            *) print_error "Option invalide" ;;
+        esac
+        
+        echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+        read -n 1 -s -r
+    done
+}
+
+# =====================================
+# MENU DE SAUVEGARDE
+# =====================================
+
+backup_menu() {
+    while true; do
+        clear
+        echo -e "${PURPLE}${BOLD}Menu de Sauvegarde${NC}"
+        echo -e "${CYAN} 1. ${EMOJI_BACKUP} Nouvelle sauvegarde complète"
+        echo -e "${CYAN} 2. ${EMOJI_BRAVE} Sauvegarder Brave Browser"
+        echo -e "${CYAN} 3. ${EMOJI_BOTTLES} Sauvegarder Bottles"
+        echo -e "${CYAN} 4. ${EMOJI_STARTUP} Sauvegarder les applications de démarrage"
+        echo -e "${CYAN} 5. ${EMOJI_OLLAMA} Sauvegarder Ollama"
+        echo -e "${CYAN} 6. ${EMOJI_INFO} Retour au menu principal"
+        echo -ne "${YELLOW}${BOLD}Choisissez une option [1-6]: ${NC}"
+        read -r choice
+        
         case $choice in
             1)
-                list_backups
+                create_backup_dir
+                backup_brave
+                backup_bottles
+                backup_startup_apps
+                backup_ollama
+                print_success "Sauvegarde complète terminée!"
                 ;;
-            2)
-                if select_backup; then
-                    read -p "Voulez-vous vraiment supprimer cette sauvegarde ? (o/N): " confirm
-                    if [[ "$confirm" =~ ^[OoYy]$ ]]; then
-                        sudo rm -rf "$BACKUP_DIR" && print_success "Sauvegarde supprimée: $BACKUP_DIR" || print_error "Échec de la suppression de la sauvegarde: $BACKUP_DIR"
-                    fi
+            2) 
+                create_backup_dir
+                backup_brave
+                ;;
+            3) 
+                create_backup_dir
+                backup_bottles
+                ;;
+            4) 
+                create_backup_dir
+                backup_startup_apps
+                ;;
+            5) 
+                create_backup_dir
+                backup_ollama
+                ;;
+            6) return ;;
+            *) print_error "Option invalide" ;;
+        esac
+        
+        echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+        read -n 1 -s -r
+    done
+}
+
+# =====================================
+# MENU DE RESTAURATION
+# =====================================
+
+restore_menu() {
+    while true; do
+        clear
+        echo -e "${PURPLE}${BOLD}Menu de Restauration${NC}"
+        
+        if ! select_backup_dir; then
+            echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+            read -n 1 -s -r
+            return
+        fi
+        
+        while true; do
+            clear
+            echo -e "${PURPLE}${BOLD}Restauration: $(basename "$CURRENT_BACKUP")${NC}"
+            echo -e "${CYAN} 1. ${EMOJI_RESTORE} Restaurer tout"
+            echo -e "${CYAN} 2. ${EMOJI_BRAVE} Restaurer Brave Browser"
+            echo -e "${CYAN} 3. ${EMOJI_BOTTLES} Restaurer Bottles"
+            echo -e "${CYAN} 4. ${EMOJI_STARTUP} Restaurer les applications de démarrage"
+            echo -e "${CYAN} 5. ${EMOJI_OLLAMA} Restaurer Ollama"
+            echo -e "${CYAN} 6. ${EMOJI_INFO} Changer de sauvegarde"
+            echo -e "${CYAN} 7. ${EMOJI_INFO} Retour au menu principal"
+            echo -ne "${YELLOW}${BOLD}Choisissez une option [1-7]: ${NC}"
+            read -r choice
+            
+            case $choice in
+                1)
+                    restore_brave
+                    restore_bottles
+                    restore_startup_apps
+                    restore_ollama
+                    print_success "Restauration complète terminée!"
+                    ;;
+                2) restore_brave ;;
+                3) restore_bottles ;;
+                4) restore_startup_apps ;;
+                5) restore_ollama ;;
+                6) break ;;
+                7) return ;;
+                *) print_error "Option invalide" ;;
+            esac
+            
+            echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+            read -n 1 -s -r
+        done
+    done
+}
+
+# =====================================
+# MENU DE CONFIGURATION
+# =====================================
+
+config_menu() {
+    while true; do
+        clear
+        echo -e "${PURPLE}${BOLD}Menu de Configuration${NC}"
+        echo -e "${CYAN} 1. ${EMOJI_CONFIG} Vérifier les prérequis système"
+        echo -e "${CYAN} 2. ${EMOJI_CONFIG} Configurer le dépôt Flatpak"
+        echo -e "${CYAN} 3. ${EMOJI_CONFIG} Configurer les applications de démarrage"
+        echo -e "${CYAN} 4. ${EMOJI_INFO} Retour au menu principal"
+        echo -ne "${YELLOW}${BOLD}Choisissez une option [1-4]: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) check_requirements ;;
+            2) 
+                if command_exists flatpak; then
+                    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo && \
+                    print_success "Dépôt Flatpak configuré" || \
+                    print_error "Échec de la configuration du dépôt Flatpak"
+                else
+                    print_error "Flatpak n'est pas installé"
                 fi
                 ;;
             3)
-                if select_backup; then
-                    restore_menu "$BACKUP_DIR"
+                if command_exists gnome-session-properties; then
+                    gnome-session-properties &
+                    print_info "Utilisez l'interface graphique pour configurer les applications de démarrage"
+                else
+                    print_error "gnome-session-properties non disponible"
                 fi
                 ;;
-            4)
-                return
-                ;;
-            *)
-                print_error "Choix invalide"
-                ;;
+            4) return ;;
+            *) print_error "Option invalide" ;;
         esac
+        
+        echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+        read -n 1 -s -r
     done
 }
 
-restore_menu() {
-    if ! select_backup; then
-        print_error "Aucune sauvegarde sélectionnée."
-        return
-    fi
-
-    echo
-    echo "=== MENU DE RESTAURATION ==="
-    echo "1. Tout restaurer"
-    echo "2. Paquets DEB seulement"
-    echo "3. Flatpaks seulement"
-    echo "4. Extensions GNOME seulement"
-    echo "5. Comptes seulement"
-    echo "6. Brave seulement"
-    echo "7. Bottles seulement"
-    echo "8. Retour"
-    echo
-
-    read -p "Choix (1-8): " choice
-    case $choice in
-        1)
-            restore_deb_packages "$BACKUP_DIR"
-            restore_flatpak "$BACKUP_DIR"
-            restore_gnome_extensions "$BACKUP_DIR"
-            restore_accounts "$BACKUP_DIR"
-            restore_brave "$BACKUP_DIR"
-            restore_bottles "$BACKUP_DIR"
-            ;;
-        2) restore_deb_packages "$BACKUP_DIR" ;;
-        3) restore_flatpak "$BACKUP_DIR" ;;
-        4) restore_gnome_extensions "$BACKUP_DIR" ;;
-        5) restore_accounts "$BACKUP_DIR" ;;
-        6) restore_brave "$BACKUP_DIR" ;;
-        7) restore_bottles "$BACKUP_DIR" ;;
-        8) return ;;
-        *) print_error "Choix invalide" ;;
-    esac
-}
+# =====================================
+# MENU PRINCIPAL
+# =====================================
 
 main_menu() {
     while true; do
-        echo
-        echo "=== MENU PRINCIPAL ==="
-        echo "1. Effectuer une sauvegarde complète"
-        echo "2. Restaurer à partir d'une sauvegarde"
-        echo "3. Vérifier les applications Flatpak"
-        echo "4. Gérer les sauvegardes"
-        echo "5. Installer Ollama et Open WebUI"
-        echo "6. Télécharger les modèles"
-        echo "7. Quitter"
-        echo
+        clear
+        echo -e "${PURPLE}${BOLD}"
+        echo "   ____       _       ____  "
+        echo "  / ___|     / \\     / ___| "
+        echo " | |  _     / _ \\   | |  _  "
+        echo " | |_| |   / ___ \\  | |_| | "
+        echo "  \\____|  /_/   \\_\\  \\____| "
+        echo -e "${NC}"
+        echo -e "${BLUE}${BOLD} G A G (Gestionnaire d'Applications GNOME) - Version Pro 4.0 ${NC}"
+        echo -e "${BLUE}${BOLD}=============================================================${NC}"
+        echo -e "${CYAN} 1. ${EMOJI_BACKUP} Sauvegarde"
+        echo -e "${CYAN} 2. ${EMOJI_RESTORE} Restauration"
+        echo -e "${CYAN} 3. ${EMOJI_APPS} Installer des applications tierces"
+        echo -e "${CYAN} 4. ${EMOJI_CONFIG} Configuration"
+        echo -e "${CYAN} 5. ${EMOJI_CHECK} Vérifier les applications installées"
+        echo -e "${CYAN} 6. ${EMOJI_INFO} Quitter"
+        echo -ne "${YELLOW}${BOLD}Choisissez une option [1-6]: ${NC}"
+        read -r choice
 
-        read -p "Choix (1-7): " choice
         case $choice in
-            1) full_backup ;;
+            1) backup_menu ;;
             2) restore_menu ;;
-            3) check_and_install_flatpak_apps ;;
-            4) backup_management_menu ;;
-            5) install_ollama_and_openwebui ;;
-            6) download_models ;;
-            7)
-                print_info "${BLUE}Au revoir !${NC}"
+            3) install_third_party ;;
+            4) config_menu ;;
+            5) check_installed_apps ;;
+            6)
+                echo -e "${GREEN}${EMOJI_OK} Merci d'avoir utilisé GAG. À bientôt!${NC}"
                 exit 0
                 ;;
-            *) print_error "Choix invalide" ;;
+            *) print_error "Option invalide" ;;
         esac
+
+        echo -ne "\n${YELLOW}Appuyez sur une touche pour continuer...${NC}"
+        read -n 1 -s -r
     done
 }
 
-check_and_install_flatpak_apps() {
-    local missing_apps=()
-    local installed_apps=$(flatpak list --app --columns=application)
+# =====================================
+# POINT D'ENTRÉE PRINCIPAL
+# =====================================
 
-    for app_name in "${!FLATPAK_APPS[@]}"; do
-        local app_id="${FLATPAK_APPS[$app_name]}"
-        if ! echo "$installed_apps" | grep -q "^$app_id$"; then
-            missing_apps+=("$app_name")
-        fi
-    done
-
-    if [ ${#missing_apps[@]} -gt 0 ]; then
-        print_warning "Applications Flatpak manquantes:"
-        printf " - %s\n" "${missing_apps[@]}"
-
-        read -p "Voulez-vous les installer ? (o/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[OoYy]$ ]]; then
-            for app_name in "${missing_apps[@]}"; do
-                local app_id="${FLATPAK_APPS[$app_name]}"
-                flatpak install -y flathub "$app_id"
-            done
-        fi
-    else
-        print_success "Toutes les applications Flatpak recommandées sont installées"
-    fi
-}
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    check_dependencies || {
-        print_warning "Certaines dépendances sont manquantes - certaines fonctionnalités peuvent ne pas être disponibles"
-        sleep 2
-    }
-    main_menu
-fi
+clear
+print_header "Démarrage de GAG Pro 4.0"
+check_requirements
+main_menu

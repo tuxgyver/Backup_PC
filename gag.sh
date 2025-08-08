@@ -1179,11 +1179,11 @@ main_menu() {
         
         # Affichage du titre avec figlet si disponible
         if command_exists figlet; then
-            echo -e "${PURPLE}${BOLD}"
+            echo -e "${BLUE}${BOLD}"
             figlet -f small "GAG Pro 4.0"
             echo -e "${NC}"
         else
-            echo -e "${PURPLE}${BOLD}"
+            echo -e "${BLUE}${BOLD}"
             echo "   ____       _       ____  "
             echo "  / ___|     / \\     / ___| "
             echo " | |  _     / _ \\   | |  _  "
